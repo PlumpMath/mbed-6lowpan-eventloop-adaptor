@@ -26,8 +26,6 @@
 #define TRACE_GROUP  "TESTAPPL"
 
 const char test_nvm_key_test_create[] = "com.arm.nanostack.create";
-const char test_nvm_key_test_create2[] = "com.arm.nanostack.create2";
-const char test_nvm_key_not_avail[] = "com.arm.nanostack.keyNotAvailable";
 
 void test1_nvm_write_progress_callback(platform_nvm_status status, void *args)
 {
@@ -63,13 +61,27 @@ void test1_nvm_create1_callback(platform_nvm_status status, void *args)
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
+void test1_nvm_flush2_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test1_nvm_flush2_callback status=%d args=%d", (int)status, (int)args);
+
+    TEST_EQ(status, PLATFORM_NVM_OK);
+    TEST_EQ(args, TEST_CONTEXT_FLUSH);
+
+    nvm_data_write.buffer_length = DATA_BUF_LEN;
+    ret = platform_nvm_key_create(test1_nvm_create1_callback, test_nvm_key_test_create, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
+}
+
+
 void test1_nvm_delete_callback(platform_nvm_status status, void *args)
 {
     platform_nvm_status ret;
     tr_debug("test1_nvm_delete_callback status=%d args=%d", (int)status, (int)args);
     TEST_EQ(status, PLATFORM_NVM_OK);
 
-    ret = platform_nvm_key_create(test1_nvm_create1_callback, test_nvm_key_test_create2, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
+    ret = platform_nvm_flush(test1_nvm_flush2_callback, TEST_CONTEXT_FLUSH);
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
@@ -82,7 +94,7 @@ void test1_nvm_write_resized_callback(platform_nvm_status status, void *args)
     TEST_EQ(args, TEST_CONTEXT_WRITE);
 
     // buffer length  has been updated to actual resized size
-    TEST_EQ(nvm_data_write.buffer_length, DATA_BUF_LEN);
+    TEST_EQ(nvm_data_write.buffer_length, DATA_BUF_LEN/2);
 
     // delete tests
     // test delete with bad arguments
@@ -91,9 +103,6 @@ void test1_nvm_write_resized_callback(platform_nvm_status status, void *args)
 
     ret = platform_nvm_key_delete(test1_nvm_delete_callback, NULL, TEST_CONTEXT_DELETE);
     TEST_EQ(ret, PLATFORM_NVM_ERROR);
-
-    ret = platform_nvm_key_delete(test1_nvm_delete_callback, test_nvm_key_not_avail, TEST_CONTEXT_DELETE);
-    TEST_EQ(ret, PLATFORM_NVM_KEY_NOT_FOUND);
 
     /* delete the key */
     ret = platform_nvm_key_delete(test1_nvm_delete_callback, test_nvm_key_test_create, TEST_CONTEXT_DELETE);
@@ -114,6 +123,20 @@ void test1_nvm_create_resize_callback(platform_nvm_status status, void *args)
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
+void test1_nvm_flush_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test1_nvm_flush_callback status=%d args=%d", (int)status, (int)args);
+
+    TEST_EQ(status, PLATFORM_NVM_OK);
+    TEST_EQ(args, TEST_CONTEXT_FLUSH);
+
+    /* buffer length resized - OK */
+    nvm_data_write.buffer_length = DATA_BUF_LEN/2;
+    ret = platform_nvm_key_create(test1_nvm_create_resize_callback, test_nvm_key_test_create, nvm_data_write.buffer_length, 0, TEST_CONTEXT_RESIZE_CREATE);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
+}
+
 void test1_nvm_write_callback(platform_nvm_status status, void *args)
 {
     platform_nvm_status ret;
@@ -124,9 +147,7 @@ void test1_nvm_write_callback(platform_nvm_status status, void *args)
     // buffer length  has been updated to actual write size
     TEST_EQ(nvm_data_write.buffer_length, 0);
 
-    /* buffer length resized - OK */
-    nvm_data_write.buffer_length = DATA_BUF_LEN;
-    ret = platform_nvm_key_create(test1_nvm_create_resize_callback, test_nvm_key_test_create, nvm_data_write.buffer_length, 0, TEST_CONTEXT_RESIZE_CREATE);
+    ret = platform_nvm_flush(test1_nvm_flush_callback, TEST_CONTEXT_FLUSH);
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
@@ -160,7 +181,7 @@ void test_cs_nvm_create_delete(void)
     ret = platform_nvm_key_create(test1_nvm_create_callback, NULL, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
     TEST_EQ(ret, PLATFORM_NVM_ERROR);
 
-    /* create key with invalid params -  buffer length 0 - OK */
+    /* create key with invalid params -  buffer length 1 - OK */
     ret = platform_nvm_key_create(test1_nvm_create_callback, test_nvm_key_test_create, 0, 0, TEST_CONTEXT_CREATE);
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }

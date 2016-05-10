@@ -26,7 +26,7 @@ extern "C" {
 
 #define DATA_BUF_LEN 12+10
 typedef struct {
-    int buffer_length;
+    uint16_t buffer_length;
     /* 12 first bytes reserved for test progress: round, failed, total */
     uint8_t buffer[DATA_BUF_LEN];
 } nvm_data_t;
@@ -47,7 +47,9 @@ typedef struct {
 #define TEST_CONTEXT_WRITE          (void*)0x05
 #define TEST_CONTEXT_READ           (void*)0x06
 #define TEST_CONTEXT_INITIAL_READ   (void*)0x07
-#define TEST_CONTEXT_DELETE         (void*)0x09
+#define TEST_CONTEXT_DELETE         (void*)0x08
+#define TEST_CONTEXT_DEINIT         (void*)0x09
+#define TEST_CONTEXT_FINALIZE       (void*)0x0a
 
 
 
@@ -55,6 +57,8 @@ typedef struct {
 #define TEST_ROUND_CREATE_DELETE    2
 #define TEST_ROUND_WRITE            3
 #define TEST_ROUND_READ             4
+#define TEST_ROUND_DEINIT           5
+#define TEST_ROUND_LAST             TEST_ROUND_DEINIT
 
 #define TEST_PRINT tr_error
 #define TEST_EQ(A,B)\

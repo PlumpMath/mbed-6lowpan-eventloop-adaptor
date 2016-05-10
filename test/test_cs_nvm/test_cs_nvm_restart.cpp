@@ -25,14 +25,51 @@
 #include "ns_trace.h"
 #define TRACE_GROUP  "TESTAPPL"
 
-void test4_nvm_write_callback(platform_nvm_status status, void *args)
+const char test_nvm_key_restart[] = "com.arm.nanostack.restart";
+
+void test5_nvm_write_callback(platform_nvm_status status, void *args)
 {
     platform_nvm_status ret;
-    tr_debug("test4_nvm_write_callback status=%d args=%d", (int)status, (int)args);
+    tr_debug("test5_nvm_write_callback status=%d args=%d", (int)status, (int)args);
     TEST_EQ(status, PLATFORM_NVM_OK);
     TEST_EQ(args, TEST_CONTEXT_WRITE);
+    ret = platform_nvm_flush(test_common_nvm_flush_callback, TEST_CONTEXT_CREATE);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
+}
 
-    ret = platform_nvm_flush(test_common_nvm_flush_callback, TEST_CONTEXT_FLUSH);
+void test5_nvm_read_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test5_nvm_read_callback status=%d args=%d", (int)status, (int)args);
+    TEST_EQ(status, PLATFORM_NVM_OK);
+    TEST_EQ(args, TEST_CONTEXT_READ);
+
+    nvm_data_read.buffer[0] = nvm_data_read.buffer[0] + 1;
+    ret = platform_nvm_write(test5_nvm_write_callback, test_nvm_key_restart, nvm_data_read.buffer, &nvm_data_read.buffer_length, TEST_CONTEXT_WRITE);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
+}
+
+void test5_nvm_create_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test4_nvm_create_callback status=%d args=%d", (int)status, (int)args);
+    TEST_EQ(status, PLATFORM_NVM_OK);
+    TEST_EQ(args, TEST_CONTEXT_CREATE);
+
+    // read restart key value
+    ret = platform_nvm_read(test5_nvm_read_callback, test_nvm_key_restart, nvm_data_read.buffer, &nvm_data_read.buffer_length, TEST_CONTEXT_READ);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
+}
+
+void test5_nvm_delete_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test5_nvm_write_callback status=%d args=%d", (int)status, (int)args);
+    TEST_EQ(status, PLATFORM_NVM_OK);
+    TEST_EQ(args, TEST_CONTEXT_DELETE);
+
+    // create restart key and update its data to get flush callback called
+    ret = platform_nvm_key_create(test5_nvm_create_callback, test_nvm_key_restart, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
@@ -41,8 +78,7 @@ void test_cs_nvm_restart(void)
     tr_info("test_cs_nvm_restart()");
     platform_nvm_status ret;
 
-    test_common_progress_init(&test_progress_data);
-    test_progress_data.round = TEST_ROUND_INIT;
-    ret = test_common_test_progress_write(test4_nvm_write_callback, &test_progress_data);
+    /* delete the progress key */
+    ret = platform_nvm_key_delete(test5_nvm_delete_callback, test_nvm_key_test_progress, TEST_CONTEXT_DELETE);
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }

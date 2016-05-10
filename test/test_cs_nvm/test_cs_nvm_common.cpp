@@ -21,11 +21,18 @@
 #include "test_cs_nvm_create_delete.h"
 #include "test_cs_nvm_write.h"
 #include "test_cs_nvm_read.h"
+#include "test_cs_nvm_deinit.h"
 #include "test_cs_nvm_restart.h"
 
 #define HAVE_DEBUG 1
 #include "ns_trace.h"
 #define TRACE_GROUP  "TESTAPPL"
+
+void test_common_nvm_finalize_callback(platform_nvm_status status, void *args)
+{
+    test_progress_data.round_ready = true;  // indicate to print results
+    test_common_proceed(&test_progress_data);
+}
 
 void test_common_nvm_flush_callback(platform_nvm_status status, void *args)
 {
@@ -33,8 +40,7 @@ void test_common_nvm_flush_callback(platform_nvm_status status, void *args)
     TEST_EQ(status, PLATFORM_NVM_OK);
     TEST_EQ(args, TEST_CONTEXT_FLUSH);
 
-    test_progress_data.round_ready = true;  // indicate to print results
-    test_common_proceed(&test_progress_data);
+    platform_nvm_finalize(test_common_nvm_finalize_callback, 0);
 }
 
 void test_common_nvm_write_data_init(nvm_data_t *nvm_data, test_progress_data_t *test_data)
@@ -74,6 +80,7 @@ void test_common_nvm_progress_read(nvm_data_t *nvm_data, test_progress_data_t *t
     test_data->round = (int)nvm_data->buffer[0];
     test_data->total = (int)nvm_data->buffer[4];
     test_data->failed = (int)nvm_data->buffer[8];
+
     tr_debug("test round = %d", test_data->round);
     tr_debug("tests total = %d", test_data->total);
     tr_debug("tests failed = %d", test_data->failed);
@@ -110,6 +117,7 @@ void test_common_proceed(test_progress_data_t *test_progress)
         tr_info(" round 2 = create/delete tests");
         tr_info(" round 3 = write tests");
         tr_info(" round 4 = read tests");
+        tr_info(" round 5 = deinit/restart");
 
         tr_debug("*******");
     } else{
@@ -124,6 +132,9 @@ void test_common_proceed(test_progress_data_t *test_progress)
                 test_cs_nvm_read();
                 break;
             case TEST_ROUND_READ:
+                test_cs_nvm_deinit();
+                break;
+            case TEST_ROUND_DEINIT:
                 test_cs_nvm_restart();
                 break;
             default:

@@ -36,6 +36,8 @@ nvm_data_t nvm_data_read;
 nvm_data_t nvm_data_write;
 test_progress_data_t test_progress_data = {0, 0, false, false, 0};
 
+void test0_nvm_write_callback(platform_nvm_status status, void *args);
+
 const char test_nvm_key_test_progress[] = "com.arm.nanostack.testdata";
 
 void test0_nvm_read_callback(platform_nvm_status status, void *args)
@@ -51,7 +53,16 @@ void test0_nvm_read_callback(platform_nvm_status status, void *args)
         TEST_EQ(ret, PLATFORM_NVM_OK);
     } else if (args == TEST_CONTEXT_INITIAL_READ) {
         test_common_nvm_progress_read(&nvm_data_read, &test_progress_data);
-        test_common_proceed(&test_progress_data);
+        if (test_progress_data.round < TEST_ROUND_LAST) {
+            test_common_proceed(&test_progress_data);
+        } else {
+            // restart test from beginning
+            test_common_progress_init(&test_progress_data);
+            test_progress_data.round = TEST_ROUND_INIT;
+            // write initial round to test data
+            test_progress_data.round = TEST_ROUND_INIT;
+            ret = test_common_test_progress_write(test0_nvm_write_callback, &test_progress_data);
+        }
     } else {
         tr_error("test0 callback returned bad status %d", status);
         TEST_EQ(true, false);   //always fail
@@ -83,6 +94,27 @@ void test0_nvm_create_callback(platform_nvm_status status, void *args)
     TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
+void test0_nvm_initial_read_callback(platform_nvm_status status, void *args)
+{
+    platform_nvm_status ret;
+    tr_debug("test0_nvm_initial_read_callback status=%d args=%d", (int)status, (int)args);
+
+    TEST_EQ(args, TEST_CONTEXT_INITIAL_READ);
+
+    if (status == PLATFORM_NVM_KEY_NOT_FOUND) {
+        // first boot, create key and write test progress
+        ret = platform_nvm_key_create(test0_nvm_create_callback, test_nvm_key_test_progress, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
+        TEST_EQ(ret, PLATFORM_NVM_OK);
+    } else if (status == PLATFORM_NVM_OK) {
+        // direct call to callback
+        test0_nvm_read_callback(status, TEST_CONTEXT_INITIAL_READ);
+    } else {
+        // error
+        tr_error("Test0 initial buffer read returned error %d", status);
+        TEST_EQ(0, 1);
+    }
+}
+
 void test0_nvm_init_callback(platform_nvm_status status, void *args)
 {
     platform_nvm_status ret;
@@ -100,17 +132,8 @@ void test0_nvm_init_callback(platform_nvm_status status, void *args)
     TEST_EQ(ret, PLATFORM_NVM_ERROR);
 
     // try to read test_round from NVM
-    ret = platform_nvm_read(test0_nvm_read_callback, test_nvm_key_test_progress, nvm_data_read.buffer, &nvm_data_read.buffer_length, TEST_CONTEXT_INITIAL_READ);
-    if (ret == PLATFORM_NVM_KEY_NOT_FOUND) {
-        // first boot, create key and write test progress
-        ret = platform_nvm_key_create(test0_nvm_create_callback, test_nvm_key_test_progress, nvm_data_write.buffer_length, 0, TEST_CONTEXT_CREATE);
-    } else if (ret == PLATFORM_NVM_OK) {
-        // NVM buffer is available, callback will be called
-    } else {
-        // error
-        tr_error("Test0 initial buffer read returned error %d", ret);
-        TEST_EQ(0, 1);
-    }
+    ret = platform_nvm_read(test0_nvm_initial_read_callback, test_nvm_key_test_progress, nvm_data_read.buffer, &nvm_data_read.buffer_length, TEST_CONTEXT_INITIAL_READ);
+    TEST_EQ(ret, PLATFORM_NVM_OK);
 }
 
 static void test0_nvm_init()
