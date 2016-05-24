@@ -13,7 +13,7 @@
     "mbed-drivers": "^1.0.0",
     "nanostack-libservice": "^3.0.0",
     "sal-stack-nanostack-eventloop": "^1.0.4",
-    "configuration-store":"~0.3.0"
+    "configuration-store":"*"
   },
   "targetDependencies": {}
 }

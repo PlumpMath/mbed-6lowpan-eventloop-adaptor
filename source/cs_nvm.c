@@ -18,10 +18,10 @@
  * NVM adaptation to Configuration Store that is storing Key-Value pairs to SRAM or flash.
  */
 
+#include <stdio.h>
 #include <string.h>
 #include <ns_types.h>
-#include <malloc.h>
-#include <configuration-store/configuration_store.h>
+#include "configuration-store/configuration_store.h"
 // #define HAVE_DEBUG
 #include "ns_trace.h"
 #include "nsdynmemLIB.h"
@@ -70,7 +70,6 @@ typedef struct cfstore_context_s {
     platform_nvm_status client_status;      // status to be returned to client
     uint8_t *client_buf;                    // buffer provided by client
     uint16_t *client_buf_len;               // client buffer length
-    bool is_initialized;                    // initialization ok
 } cs_context_t;
 
 ARM_CFSTORE_DRIVER *drv = &cfstore_driver;
@@ -108,11 +107,21 @@ static void configuration_store_cb(int32_t status, ARM_CFSTORE_OPCODE cmd_code, 
             tr_debug("CFSTORE_OPCODE_CREATE %d", (int)status);
             cf_context->client_status = nvm_error_map(status);
             cf_context->state = NVM_STATE_CREATE_DONE;
+            if (status >= ARM_DRIVER_OK) {
+                // key created successfully, close the key
+                if (nvm_close_internal(cf_context) == false) {
+                    /* writing failed set status and start callback timer */
+                    cf_context->state = NVM_STATE_CLOSE_DONE;
+                    cf_context->client_status = PLATFORM_NVM_ERROR;
+                } else {
+                    // closing OK, wait for CFSTORE_OPCODE_CLOSE callback
+                }
+            }
             break;
         case CFSTORE_OPCODE_OPEN:
             tr_debug("CFSTORE_OPCODE_OPEN %d", (int)status);
             if (status < ARM_DRIVER_OK) {
-                // opening failed, do not continue further
+                // opening failed, do not continue any further
                 cf_context->client_status = nvm_error_map(status);
                 cf_context->state = NVM_STATE_OPEN_DONE;
                 break;
@@ -174,7 +183,6 @@ static void configuration_store_cb(int32_t status, ARM_CFSTORE_OPCODE cmd_code, 
             break;
         case CFSTORE_OPCODE_DELETE:
             tr_debug("CFSTORE_OPCODE_DELETE %d", (int)status);
-            cf_context->state = NVM_STATE_DELETE_DONE;
             if (nvm_close_internal(cf_context) == false) {
                 /* closing failed set client_status */
                 cf_context->state = NVM_STATE_CLOSE_DONE;
@@ -191,6 +199,7 @@ static void configuration_store_cb(int32_t status, ARM_CFSTORE_OPCODE cmd_code, 
         case CFSTORE_OPCODE_UNINITIALIZE:
             tr_debug("CFSTORE_OPCODE_UNINITIALIZE %d", (int)status);
             cf_context->state = NVM_STATE_UNINIT_DONE;
+            cf_context->client_status = nvm_error_map(status);
             break;
         case CFSTORE_OPCODE_FLUSH:
             tr_debug("CFSTORE_OPCODE_FLUSH %d", (int)status);
@@ -206,18 +215,25 @@ static void configuration_store_cb(int32_t status, ARM_CFSTORE_OPCODE cmd_code, 
     return;
 }
 
-static bool nvm_fsm_update(cs_context_t *cs_context)
+static int nvm_fsm_update(cs_context_t *cs_context)
 {
-    bool handled = false;
+    int ret_val = 0;
 
     tr_debug("nvm_fsm_update() state=%d", (int)cs_context->state);
     switch (cs_context->state)
     {
         case NVM_STATE_UNINIT_DONE:
-            cs_context->is_initialized = false;
-            // fall through
+            cs_context->client_cb(cs_context->client_status, cs_context->client_context);
+            cs_context->state = NVM_STATE_NONE;
+            if (cs_context->client_status == PLATFORM_NVM_OK) {
+                ns_dyn_mem_free(cs_context_ptr);
+                cs_context_ptr = NULL;
+            }
+            ret_val = 1;
+            break;
         case NVM_STATE_INIT_DONE:
         case NVM_STATE_CREATE_DONE:
+        case NVM_STATE_OPEN_DONE:
         case NVM_STATE_WRITE_DONE:
         case NVM_STATE_READ_DONE:
         case NVM_STATE_DELETE_DONE:
@@ -225,11 +241,7 @@ static bool nvm_fsm_update(cs_context_t *cs_context)
         case NVM_STATE_FLUSH_DONE:
             cs_context->state = NVM_STATE_NONE;
             cs_context->client_cb(cs_context->client_status, cs_context->client_context);
-            handled = true;
-            break;
-
-        case NVM_STATE_OPEN_DONE:
-            tr_warning("timer elapsed while handling operation %d", cs_context->state);
+            ret_val = 1;
             break;
 
         default:
@@ -237,7 +249,7 @@ static bool nvm_fsm_update(cs_context_t *cs_context)
             break;
     }
 
-    return handled;
+    return ret_val;
 }
 
 /**
@@ -249,7 +261,7 @@ platform_nvm_status platform_nvm_init(nvm_callback *callback, void *context)
 
     tr_debug("platform_nvm_init()");
 
-    if (callback == NULL) {
+    if (callback == NULL || cs_context_ptr) {
         return PLATFORM_NVM_ERROR;
     }
 
@@ -257,14 +269,13 @@ platform_nvm_status platform_nvm_init(nvm_callback *callback, void *context)
         cs_context_ptr = ns_dyn_mem_alloc(sizeof(cs_context_t));
     }
 
-    if (cs_context_ptr == NULL || cs_context_ptr->is_initialized == true) {
+    if (cs_context_ptr == NULL) {
         return PLATFORM_NVM_ERROR;
     }
 
     memset(cs_context_ptr, 0, sizeof(cs_context_t));
     cs_context_ptr->client_cb = callback;
     cs_context_ptr->client_context = context;
-    cs_context_ptr->is_initialized = true;
 
     cs_context_ptr->capabilities = drv->GetCapabilities();
 
@@ -273,6 +284,8 @@ platform_nvm_status platform_nvm_init(nvm_callback *callback, void *context)
     ret = drv->Initialize(configuration_store_cb, cs_context_ptr);
     if (ret < ARM_DRIVER_OK) {
         tr_error("initialisation failed %d", (int)ret);
+        ns_dyn_mem_free(cs_context_ptr);
+        cs_context_ptr = NULL;
         return PLATFORM_NVM_ERROR;
     }
 
@@ -296,19 +309,21 @@ platform_nvm_status platform_nvm_finalize(nvm_callback *callback, void *context)
         return PLATFORM_NVM_ERROR;
     }
 
-    if (cs_context_ptr == NULL || callback == NULL) {
+    if (callback == NULL) {
         return PLATFORM_NVM_ERROR;
     }
 
     cs_context_ptr->client_cb = callback;
     cs_context_ptr->client_context = context;
     cs_context_ptr->state = NVM_STATE_UNINITIALIZING;
+    cs_context_ptr->client_status = PLATFORM_NVM_OK;
     drv->PowerControl(ARM_POWER_OFF);
     ret = drv->Uninitialize();
 
     if (ret < ARM_DRIVER_OK) {
-        tr_error("deinitialization failed %d", (int)ret);
-        return PLATFORM_NVM_ERROR;
+        tr_error("deinit failed %d", (int)ret);
+        cs_context_ptr->state = NVM_STATE_UNINIT_DONE;
+        cs_context_ptr->client_status = nvm_error_map(ret);
     }
 
     nvm_fsm_timer_start();
@@ -337,21 +352,22 @@ platform_nvm_status platform_nvm_key_create(nvm_callback *callback, const char *
     cs_context_ptr->client_cb = callback;
     cs_context_ptr->client_context = context;
     cs_context_ptr->state = NVM_STATE_CREATING;
+    cs_context_ptr->client_status = PLATFORM_NVM_OK;
 
     memset(&keydesc, 0, sizeof(ARM_CFSTORE_KEYDESC));
     keydesc.drl = ARM_RETENTION_NVM;
 
-    ret = drv->Create(key_name, value_len, &keydesc, &cs_context_ptr->hkey);
+    ret = drv->Create(key_name, value_len, &keydesc, cs_context_ptr->hkey);
     if(ret < ARM_DRIVER_OK) {
         if (ret == ARM_CFSTORE_DRIVER_ERROR_PREEXISTING_KEY) {
             tr_debug("adjust value len to %d", value_len);
-            ret = drv->Create(key_name, value_len, NULL, &cs_context_ptr->hkey);
+            ret = drv->Create(key_name, value_len, NULL, cs_context_ptr->hkey);
         }
     }
 
     if(ret < ARM_DRIVER_OK) {
         tr_error("Key creation failed %d", (int)ret);
-        cs_context_ptr->state = NVM_STATE_DELETE_DONE;
+        cs_context_ptr->state = NVM_STATE_CREATE_DONE;
         cs_context_ptr->client_status = nvm_error_map(ret);
     }
 
@@ -555,7 +571,7 @@ static bool nvm_delete_internal(cs_context_t *cf_context)
     if(ret >= ARM_DRIVER_OK) {
         return true;
     } else {
-        tr_error("Read failed %d", (int)ret);
+        tr_error("Delete failed %d", (int)ret);
         return false;
     }
 }
@@ -579,7 +595,7 @@ static bool nvm_close_internal(cs_context_t *cf_context)
  */
 static bool nvm_status_check(cs_context_t *cf_context)
 {
-    if (!cs_context_ptr || !cs_context_ptr->is_initialized ) {
+    if (!cs_context_ptr) {
         // not initialized
         tr_error("NVM not initialized");
         return false;
@@ -616,12 +632,14 @@ static platform_nvm_status nvm_error_map(int32_t cs_error)
 static void nvm_fsm_timer_cb(void *args)
 {
     (void) args;
-    if (!nvm_fsm_update(cs_context_ptr)) {
-        // Nothing handled, restart timer
-        tr_debug("nvm_fsm_timer_cb not handled event in () %d", (int)cs_context_ptr->state);
-        nvm_fsm_timer_start();
-    } else {
-        cs_context_ptr->callback_timer = NULL;
+    switch(nvm_fsm_update(cs_context_ptr)) {
+        case 0:
+            // Nothing processed, restart timer
+            tr_debug("nvm_fsm_timer_cb not handled event in () %d", (int)cs_context_ptr->state);
+            nvm_fsm_timer_start();
+            break;
+        default:
+            break;
     }
 }
 
